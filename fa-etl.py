@@ -50,40 +50,7 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
 
     logging.basicConfig(filename=Path(log_file), format='%(asctime)s:%(message)s: ', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
 
-# %%
-# input_dir = '/Users/nm/Downloads/firstamerican/nationwide-files'
-# annual_file = '20220606_Annual.txt'
-# sale_file = '20220606_DeedMtg.txt'
-# historical_file = '20220606_ValueHistory.parquet'
-
-# input_dir = '/Users/nm/Downloads/test/input'
-# annual_file = 'Prop01001.txt'
-# sale_file = 'Deed01001.txt'
-# historical_file = 'ValHist01001.txt'
-# hpi_file = 'county_hpi.parquet'
-#
-# output_dir = '/Users/nm/Downloads/test/output'
-#
-# xwalk_dir = '/Users/nm/Downloads/geos/xwalks'
-# xwalk_files = ['zcta.parquet', 'block_groups_2020.parquet', 'city_places.parquet', 'urban_classifications.parquet', 'unified_school_districts.parquet', 'elementary_school_districts.parquet', 'secondary_school_districts.parquet', 'congressional_districts_118.parquet']
-#
-# try: os.remove(path = '/Users/nm/Downloads/test/input/Prop01001.parquet')
-# except: pass
-# try: os.remove(path = '/Users/nm/Downloads/test/input/Deed01001.parquet')
-# except: pass
-# try: os.remove(path = '/Users/nm/Downloads/test/input/ValHist01001.parquet')
-# except: pass
-# try: os.remove(path = '/Users/nm/Downloads/test/output/crosswalk.parquet')
-# except: pass
-# try: os.remove(path = Path(output_dir) / 'timeseries_av_sales.parquet')
-# except: pass
-# try: os.remove(path = Path(output_dir) / 'timeseries_av_sales.parquet')
-# except: pass
-# try: os.remove(path = Path(output_dir) / 'sales_res_av_all.parquet')
-# except: pass
-
-    logging.info('Starting script.')
-    logging.info('Memory usage: ' + mem_profile())
+    logging.info(f'Starting script. Memory usage {mem_profile()}')
     os.makedirs(output_dir, exist_ok = True)
 
     annual_parquet = re.sub('.txt', '.parquet', annual_file)
@@ -91,39 +58,77 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
     sale_2_parquet = 'ranked_' + sale_parquet
     historical_parquet = re.sub('.txt', '.parquet', historical_file)
 
-    logging.info(f'Check if files exist.')
+    logging.info(f'Check if annual files exist.')
     if (Path(input_dir) / annual_parquet).exists():
         print(Path(input_dir) / annual_parquet)
-        annual_ingest = (pl.scan_parquet(Path(input_dir) / annual_parquet))
+        annual_ingest = (pl.scan_parquet(Path(input_dir) / annual_parquet, low_memory = True))
+        annual_sink_count = annual_ingest.select(pl.count()).collect(streaming = True)
+        annual_raw_count = (pl.scan_csv(Path(input_dir) / annual_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
+                            .filter(pl.col('PropertyClassID') == 'R')
+                            .filter(pl.col('PropertyID').is_not_null())
+                            .select(pl.count())).collect(streaming = True)
+        if annual_sink_count.shape[0] == annual_raw_count.shape[0]:
+            logging.info(f'{annual_parquet} matches {annual_file}.')
+        else:
+            logging.info(f'{annual_parquet} does not match {annual_file}.')
+            logging.info(f'{annual_raw_count.shape[0]} rows in {annual_file}.')
+            logging.info(f'{annual_raw_count.shape[0] - annual_sink_count.shape[0]} rows missing.')
+            annual_ingest = (pl.scan_csv(Path(input_dir) / annual_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)) 
     elif (Path(input_dir) / annual_file).exists():
         annual_ingest = (pl.scan_csv(Path(input_dir) / annual_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)) 
     else:
         logging.info(f'No annual file found.')
         sys.exit()
 
+    logging.info(f'Check if sale files exist.')
     if (Path(input_dir) / sale_parquet).exists():
-        sale_ingest = (pl.scan_parquet(Path(input_dir) / sale_parquet))
+        sale_ingest = (pl.scan_parquet(Path(input_dir) / sale_parquet, low_memory = True))
+        sale_sink_count = sale_ingest.select(pl.count()).collect(streaming = True)
+        sale_raw_count = (pl.scan_csv(Path(input_dir) / sale_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
+                                .filter((pl.col('SaleAmt') > 0) & (pl.col('SaleAmt').is_not_null()))
+                                .filter(pl.col('PropertyID').is_not_null())
+                                .select(pl.count())).collect(streaming = True)
+        if sale_sink_count.shape[0] == sale_raw_count.shape[0]:
+            logging.info(f'{sale_parquet} matches {sale_file}.')
+        else:
+            logging.info(f'{sale_parquet} does not match {sale_file}.')
+            logging.info(f'{sale_raw_count.shape[0]} rows in {sale_file}.')
+            logging.info(f'{sale_raw_count.shape[0] - sale_sink_count.shape[0]} rows missing.')
+            sale_ingest = (pl.scan_csv(Path(input_dir) / sale_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)) 
     elif (Path(input_dir) / sale_file).exists():
         sale_ingest = (pl.scan_csv(Path(input_dir) / sale_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)) 
     else:
         logging.info(f'No sale file found.')
         sys.exit()
 
+    logging.info(f'Check if historical files exist.')
     if (Path(input_dir) / historical_parquet).exists():
-        historical_ingest = (pl.scan_parquet(Path(input_dir) / historical_parquet))
+        historical_ingest = (pl.scan_parquet(Path(input_dir) / historical_parquet, low_memory = True))
+        historical_sink_count = historical_ingest.select(pl.count()).collect(streaming = True)
+        historical_raw_count = (pl.scan_csv(Path(input_dir) / historical_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
+                                .filter(pl.col('PropertyID').is_not_null())
+                                .select(pl.count())).collect(streaming = True)
+        if historical_sink_count.shape[0] == historical_raw_count.shape[0]:
+            logging.info(f'{sale_parquet} matches {historical_file}.')
+        else:
+            logging.info(f'{historical_parquet} does not match {historical_file}.')
+            logging.info(f'{historical_raw_count.shape[0]} rows in {historical_file}.')
+            logging.info(f'{historical_raw_count.shape[0] - historical_sink_count.shape[0]} rows missing.')
+            historical_ingest = (pl.scan_csv(Path(input_dir) / historical_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)) 
     elif (Path(input_dir) / historical_file).exists():
         historical_ingest = (pl.scan_csv(Path(input_dir) / historical_file, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)) 
     else:
         logging.info(f'No historical file found.')
         sys.exit()
 
-    logging.info('Memory usage: ' + mem_profile())
     if not (Path(input_dir) / annual_parquet).exists():
-        logging.info(f'Sinking {annual_file}.')
+        logging.info(f'Sinking {annual_file}. Memory usage: {mem_profile()}.')
         t0 = time.time()
         ((annual_ingest
+            .filter(pl.col('PropertyClassID') == 'R')
+            .filter(pl.col('PropertyID').is_not_null())
             .with_columns([
-                (pl.col('PropertyID').cast(pl.Utf8)),
+                (pl.col('PropertyID').cast(pl.Int64)),
                 (pl.col('FIPS').cast(pl.Utf8).str.rjust(5, "0")),
                 (pl.col("FATimeStamp").cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
                 (pl.col('CurrentSaleRecordingDate').cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
@@ -153,10 +158,11 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
         logging.info(f'Writing {sale_file}.')
         t0 = time.time()
         ((sale_ingest
+            .filter((pl.col('SaleAmt') > 0) & (pl.col('SaleAmt').is_not_null()))
+            .filter(pl.col('PropertyID').is_not_null())
             .with_columns(pl.col('RecordingDate').cast(pl.Utf8).str.slice(offset=0,length = 4).alias("RecordingYearSlice"))
             .with_columns([
-                ## Format date fields
-                (pl.col('PropertyID').cast(pl.Utf8)),
+                (pl.col('PropertyID').cast(pl.Int64)),
                 (pl.col('FIPS').cast(pl.Utf8).str.rjust(5, "0")),
                 (pl.col("RecordingDate").cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
                 (pl.col('SaleDate').cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
@@ -182,7 +188,6 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                 (pl.col('FATimeStamp').dt.year().alias("FATimeStampYear"))
             ])
             .select(['PropertyID', "RecordingDate", 'SaleAmt', 'SalesPriceCode', 'TransferTax', 'FATransactionID', 'FirstMtgAmt', 'TransactionType', 'FATransactionID_1', 'RecordingYear', 'SaleYear'])
-            .filter((pl.col("RecordingYear") >= 2019) | (pl.col("SaleYear") >= 2019))
         ).sink_parquet(Path(input_dir) / sale_parquet, compression="snappy"))
         t1 = time.time()
         logging.info(f"{sale_file} write successful. {round((t1-t0)/60,2)} minutes.")
@@ -191,37 +196,37 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
     if not (Path(input_dir) / sale_2_parquet).exists():
         t0 = time.time()
         sale_egress = (pl.scan_parquet(Path(input_dir) / sale_parquet, low_memory = True)
-            # Requires collection to memory
+            .filter((pl.col("RecordingYear") >= 2019) | (pl.col("SaleYear") >= 2019))
             .with_columns([
                 (pl.coalesce(pl.col(["SaleYear", "RecordingYear"])).cast(pl.Int16).alias("SaleRecordingYear")),
                 (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(['RecordingYear', "PropertyID"]).alias("RecentSaleByYear")),
                 (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(["PropertyID"]).alias("MostRecentSale")),
                 (pl.when((pl.col("FATransactionID_1").is_in(['1', '6'])) & (pl.col('TransactionType').is_in(['2', '3']))).then(1).otherwise(0).alias("SaleFlag"))
             ])
+            .filter((pl.col('SaleFlag') == 1) & (pl.col('RecentSaleByYear') == 1))
+            .filter(pl.col("SaleRecordingYear") >= 2019)
             ).collect(streaming=True)
-
         sale_egress.write_parquet(file = Path(input_dir) / sale_2_parquet, use_pyarrow=True, compression="snappy")
         sale_egress.clear()
-        #sink_parquet(Path(input_dir) / sale_parquet, compression="snappy")
         t1 = time.time()
         logging.info(f"{sale_2_parquet} write successful. {round((t1-t0)/60,2)} minutes.")
 
-    logging.info('Memory usage: ' + mem_profile())
-    if not (Path(input_dir) / historical_parquet).exists():
-        logging.info(f'Sinking {historical_file}.')
-        t0 = time.time()
-        (historical_ingest
-            .with_columns([
-                (pl.col('PropertyID').cast(pl.Utf8)),
-                (pl.col('FIPS').cast(pl.Utf8).str.rjust(5, "0")),
-                (pl.col("AssdYear").cast(pl.Int16)),
-                (pl.col("MarketValueYear").cast(pl.Int16)),
-                (pl.col("ApprYear").cast(pl.Int16)),
-                (pl.col("TaxableYear").cast(pl.Int16))
-            ])
-            ).sink_parquet(Path(input_dir) / historical_parquet, compression="snappy")
-        t1 = time.time()
-        logging.info(f"{historical_parquet} sink successful. {round((t1-t0)/60,2)} minutes.")
+    # logging.info('Memory usage: ' + mem_profile())
+    # if not (Path(input_dir) / historical_parquet).exists():
+    #     logging.info(f'Sinking {historical_file}.')
+    #     t0 = time.time()
+    #     (historical_ingest
+    #         .with_columns([
+    #             (pl.col('PropertyID').cast(pl.Int64)),
+    #             (pl.col('FIPS').cast(pl.Utf8).str.rjust(5, "0")),
+    #             (pl.col("AssdYear").cast(pl.Int16)),
+    #             (pl.col("MarketValueYear").cast(pl.Int16)),
+    #             (pl.col("ApprYear").cast(pl.Int16)),
+    #             (pl.col("TaxableYear").cast(pl.Int16))
+    #         ])
+    #         ).sink_parquet(Path(input_dir) / historical_parquet, compression="snappy")
+    #     t1 = time.time()
+    #     logging.info(f"{historical_parquet} sink successful. {round((t1-t0)/60,2)} minutes.")
 
     logging.info('Memory usage: ' + mem_profile())
     logging.info(f'Converting parcel locations to geometries.')
@@ -237,16 +242,45 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
 
     county_cbsa_data = pd.read_parquet(path= Path(xwalk_dir) / 'county_cbsa_fips.parquet')
 
+    build_xwalk = False
+
+    if (Path(output_dir) / 'crosswalk.parquet').exists():
+        logging.info(f'crosswalk.parquet exists.')
+        crosswalk = (pl.scan_parquet(Path(output_dir) / 'crosswalk.parquet', low_memory = True)
+                .select(['PropertyID']))
+        annual = (pl.scan_parquet(Path(input_dir) / annual_parquet, low_memory = True)
+                .select(['PropertyID']))
+        annual_anti = annual.join(crosswalk, left_on='PropertyID', right_on ='PropertyID', how='anti')
+
+        check_annual_anti = annual_anti.collect(streaming=True)
+
+        logging.info(f'{check_annual_anti.shape[0]} missing PropertyIDs in crosswalk.parquet.')
+        if check_annual_anti.shape[0] > 0: # comment off for testing
+            build_xwalk = True
+
+    if build_xwalk is True:
+        t0 = time.time()
+        chunk_data = (pl.scan_parquet(Path(input_dir) / annual_parquet)
+                        .join(annual_anti, left_on='PropertyID', right_on ='PropertyID', how='inner')
+                        .select(["FIPS_SitusCensusTract"])
+                        .group_by(["FIPS_SitusCensusTract"])
+                        .agg(pl.count())
+                        ).collect(streaming=True)
+        logging.info(f'{chunk_data.shape[0]} PropertyIDs to geocode.')
+
     if not (Path(output_dir) / 'crosswalk.parquet').exists():
         t0 = time.time()
-
         chunk_data = (pl.scan_parquet(Path(input_dir) / annual_parquet)
                         .select(["FIPS_SitusCensusTract"])
                         .group_by(["FIPS_SitusCensusTract"])
                         .agg(pl.count())
                         ).collect(streaming=True)
+        logging.info(f'{chunk_data.shape[0]} PropertyIDs to geocode.')
+        build_xwalk = True
+
+    if build_xwalk is True:
         chunk_data = chunk_data.to_pandas()
-        count_per_partition = 300000
+        count_per_partition = 500000
         chunk_data = chunk_data.sort_values(by=["FIPS_SitusCensusTract"], ascending=True).reset_index(drop=True)
         cuts = math.ceil(chunk_data.agg({'count': 'sum'}).reset_index()[0][0]/count_per_partition)
         chunk_data['partition_index'] = weighted_qcut(chunk_data["FIPS_SitusCensusTract"], chunk_data['count'], cuts, labels=False)
@@ -256,10 +290,6 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
             chunk_list = i[1]
             print(chunk_list)
             logging.info(f'Processing: {chunk_list}')
-            # parcel_data = (pl.scan_parquet(Path(input_dir) / annual_parquet, low_memory = True)
-            #                  .select(['PropertyID','APN','FIPS','SitusCensusTract', 'SitusCensusBlock', 'SitusLongitude','SitusLatitude'])
-            #                  .filter(pl.col('FIPS') == i)).collect(streaming=True)
-            # parcel_data = parcel_data.to_pandas()
             parcel_data = pd.read_parquet(Path(input_dir) / annual_parquet, columns=['PropertyID','APN','FIPS','SitusCensusTract', 'SitusCensusBlock', 'SitusLongitude','SitusLatitude'], 
                                             memory_map = True, filters = [("FIPS_SitusCensusTract", 'in', chunk_list)])
 
@@ -294,20 +324,17 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
             parcel_data['geohash'] = list(map(lambda x: pygeohash.encode(x.x, x.y, precision=18), parcel_data.geometry.make_valid().to_list()))
 
             parcel_data = parcel_data.drop(['geometry'], axis=1)
-            #parcel_data = parcel_data.assign(county_fips = parcel_data['block_group_fips'].str.slice(start=0, stop=5))
-            #parcel_data = parcel_data.assign(state_fips = parcel_data['block_group_fips'].str.slice(start=0, stop=2))
             parcel_data = dd.from_pandas(data = parcel_data, npartitions = 1)
             dd.to_parquet(df = parcel_data, path = Path(output_dir) / f'crosswalk_dataset.parquet', append=True, ignore_divisions=True)
 
         logging.info('Memory usage: ' + mem_profile())
         logging.info(f'Writing crosswalk.parquet')
-        #crosswalk_data = dd.read_parquet(path = Path(output_dir) / 'crosswalk_dataset.parquet').compute()
-        #crosswalk_data = pl.from_pandas(crosswalk_data)
-        #crosswalk_data.write_parquet(file = Path(output_dir) / 'crosswalk.parquet', use_pyarrow=True, compression="snappy")
+        # Parquet write (more experimental)
         (pl.scan_parquet(Path(output_dir) / 'crosswalk_dataset.parquet/*')
             .sink_parquet(Path(output_dir) / 'crosswalk.parquet', compression="snappy"))
-
-        #parcel_data.to_parquet(path= Path(output_dir) / 'crosswalk.parquet', index = False)
+        # Dask write (mem issues but works)
+        #crosswalk_data = dd.read_parquet(Path(output_dir) / 'crosswalk_dataset.parquet').compute()
+        #crosswalk_data.to_parquet(Path(output_dir) / 'crosswalk.parquet', engine='pyarrow', compression="snappy")
         t1 = time.time()
         logging.info(f"crosswalk.parquet created. {round((t1-t0)/60,2)} minutes.")
         del parcel_data
@@ -322,8 +349,8 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                         .filter(pl.col("SaleFlag") == 1)
                         .filter(pl.col('RecentSaleByYear') == 1)
                         .filter((pl.col("SaleAmt").is_not_null()) & (pl.col("SaleAmt") > 0))
+                        .select(pl.all().exclude(['SalesPriceCode', 'TransferTax', 'FirstMtgAmt', 'FATransactionID_1', 'SaleFlag', 'RecentSaleByYear']))
                     )
-                        #  .filter((pl.col("TaxAmt").is_not_null()) & 
 
     # sales_count_data = (pl.scan_parquet(Path(input_dir) / sale_2_parquet, low_memory = True)
     #                     .filter((pl.col('PropertyID').is_not_null()))
@@ -420,10 +447,7 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                             .with_columns([(pl.col('year').cast(pl.Int16))])
                             )
 
-    logging.info(f"Creating unified sales data.")
-
-    logging.info('Memory usage: ' + mem_profile())
-    logging.info(f"Scanning join.")
+    logging.info(f"Creating unified sales data. {mem_profile()}. Scanning join.")
     #sales_unified = sales_data.join(historical_tax_data, left_on=['PropertyID','SaleRecordingYear'], right_on =['PropertyID','AssdYear'], how="left")
     ##sales_unified = sales_unified.join(historical_assd_data, left_on=['PropertyID','SaleRecordingYear'], right_on =['PropertyID','AssdYear'], how="left")
     ##sales_unified = sales_unified.join(historical_market_data, left_on=['PropertyID','SaleRecordingYear'], right_on =['PropertyID','MarketValueYear'], how="left")
@@ -447,22 +471,11 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
     if not (Path(output_dir) / 'sales_snapshot_staging.parquet').exists():
         (sales_data
             .join(annual_tax_data, left_on=['PropertyID', 'SaleRecordingYear'], right_on =['PropertyID', 'TaxYear'], how="inner")
-            .join(xwalk_data, left_on='PropertyID', right_on ='PropertyID', how="left")
-            .join(hpi_data.select(['county_fips','year','hpi_index_2021']), left_on=['FIPS','SaleRecordingYear'], right_on =['county_fips','year'], how="left")
+            .filter(pl.col("PropertyClassID") == 'R')
+            .filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
+            .join(xwalk_data, left_on='PropertyID', right_on ='PropertyID', how="inner")
         ).sink_parquet(Path(output_dir) / 'sales_snapshot_staging.parquet', compression="snappy")
-    logging.info(f"Sink sales_snapshot_staging.parquet successful")
-    logging.info('Memory usage: ' + mem_profile())
-
-    logging.info(f"Sinking sales_pooled_staging.parquet")
-    if not (Path(output_dir) / 'sales_pooled_staging.parquet').exists():
-        (sales_data
-            .filter(pl.col('MostRecentSale') == 1)
-            .join(annual_tax_data, left_on='PropertyID', right_on ='PropertyID', how="inner")
-            .join(xwalk_data, left_on='PropertyID', right_on ='PropertyID', how="left")
-            .join(hpi_data.select(['county_fips','year','hpi_index_2021']), left_on=['FIPS','SaleRecordingYear'], right_on =['county_fips','year'], how="left")
-        ).sink_parquet(Path(output_dir) / 'sales_pooled_staging.parquet', compression="snappy")
-    logging.info(f"Sink sales_pooled_staging.parquet successful")
-    logging.info('Memory usage: ' + mem_profile())
+    logging.info(f"Sink sales_snapshot_staging.parquet successful. {mem_profile()}.")
 
     # Places where market value should be used instead of assd value
     # KS, NC, PA, NY, TX, SC, KY, AZ
@@ -477,8 +490,8 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                 'cbsa':   ['cbsa_fips', 'cbsa_title'],
                 'city':   ['city_geoid', 'city_name', 'city_state_code', 'city_population2020', 'city_population2022', 'city_rank', 'city_places_area_m2']}
 
-    pooled_bins =   ["Total", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_PooledPercentile", "SaleAmt_PooledDecile", "SaleAmt_PooledQuintile"]
-    snapshot_bins = ["Total", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_Percentile", "SaleAmt_Decile", "SaleAmt_Quintile"]
+    pooled_bins =   ["Total", "SaleBins", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_PooledPercentile", "SaleAmt_PooledDecile", "SaleAmt_PooledQuintile"]
+    snapshot_bins = ["Total", "SaleBins", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_Percentile", "SaleAmt_Decile", "SaleAmt_Quintile"]
 
     def _percentile(self:pl.Expr, method='ordinal')-> pl.Expr:
         return self.rank(descending=True, method=method) / self.count()
@@ -490,7 +503,6 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                         .filter(pl.col("PropertyClassID") == 'R')
                         .filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
                         .with_columns([
-                            # (pl.when((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()) ).then(1).otherwise(0).alias("Tax_Sale_NotNull")),
                             (pl.col('TaxAmt') / pl.col('SaleAmt')).alias('TaxRate')
                         ])
                         .with_columns([
@@ -508,19 +520,29 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                                 .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') <= 200000)).then(pl.lit("2 - $100K-$200K"))
                                 .when((pl.col('SaleAmt') > 200000) & (pl.col('SaleAmt') < 250000)).then(pl.lit("3 - $200K-$250K"))
                                 .when((pl.col('SaleAmt') >= 250000) & (pl.col('SaleAmt') <= 350000)).then(pl.lit("4 - $250K-$350K"))
-                                .when((pl.col('SaleAmt') > 350000) & (pl.col('SaleAmt') < 1000000)).then(pl.lit("5 - $350K-$1M"))
-                                .when((pl.col('SaleAmt') >= 1000000)).then(pl.lit("6 - >$1M"))
+                                .when((pl.col('SaleAmt') > 350000)).then(pl.lit("5 - >$350K"))
                                 .otherwise(None).alias("LincolnSale_BinsWide")),
                             (pl.when((pl.col('SaleAmt') < 120000)).then(pl.lit("1 - <$120K"))
                                 .when((pl.col('SaleAmt') >= 120000) & (pl.col('SaleAmt') <= 180000)).then(pl.lit("2 - $120K-$180K"))
                                 .when((pl.col('SaleAmt') > 180000) & (pl.col('SaleAmt') < 270000)).then(pl.lit("3 - $180K-$270K"))
                                 .when((pl.col('SaleAmt') >= 270000) & (pl.col('SaleAmt') <= 330000)).then(pl.lit("4 - $270K-$330K"))
-                                .when((pl.col('SaleAmt') > 330000) & (pl.col('SaleAmt') < 1000000)).then(pl.lit("5 - $330K-$1M"))
-                                .when((pl.col('SaleAmt') >= 1000000)).then(pl.lit("6 - >$1M"))
+                                .when((pl.col('SaleAmt') > 330000)).then(pl.lit("5 - >$330K"))
                                 .otherwise(None).alias("LincolnSale_BinsNarrow")),
+                            (pl.when((pl.col('SaleAmt') < 100000)).then(pl.lit("1 - <$100K"))
+                                .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') < 200000)).then(pl.lit("2 - $100K-$200K"))
+                                .when((pl.col('SaleAmt') >= 200000) & (pl.col('SaleAmt') < 300000)).then(pl.lit("3 - $200K-$300K"))
+                                .when((pl.col('SaleAmt') >= 300000) & (pl.col('SaleAmt') < 400000)).then(pl.lit("4 - $300K-$400K"))
+                                .when((pl.col('SaleAmt') >= 400000) & (pl.col('SaleAmt') < 500000)).then(pl.lit("5 - $400K-$500K"))
+                                .when((pl.col('SaleAmt') >= 500000) & (pl.col('SaleAmt') < 600000)).then(pl.lit("6 - $500K-$600K"))
+                                .when((pl.col('SaleAmt') >= 600000) & (pl.col('SaleAmt') < 700000)).then(pl.lit("7 - $600K-$700K"))
+                                .when((pl.col('SaleAmt') >= 700000) & (pl.col('SaleAmt') < 800000)).then(pl.lit("8 - $700K-$800K"))
+                                .when((pl.col('SaleAmt') >= 800000) & (pl.col('SaleAmt') < 900000)).then(pl.lit("9 - $800K-$900K"))
+                                .when((pl.col('SaleAmt') >= 900000) & (pl.col('SaleAmt') < 1000000)).then(pl.lit("10 - $900K-$1M"))
+                                .when((pl.col('SaleAmt') >= 1000000)).then(pl.lit("11 - >$1M"))
+                                .otherwise(None).alias("SaleBins")),
                             (pl.lit("Total")).alias("Total"),
                         ])
-                        .with_columns([ 
+                        .with_columns([
                             (pl.when((pl.col("SaleAmt_Percentile") <= 2) | (pl.col("SaleAmt_Percentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("Sale_Outliers"),
                             (pl.when((pl.col("TaxRate_Percentile") <= 2) | (pl.col("TaxRate_Percentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("TaxRate_Outliers")
                         ])
@@ -537,9 +559,7 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
             print(s_bin)
             snapshot_agg = (pl.scan_parquet(Path(output_dir) / 'sales_taxes_snapshot.parquet', low_memory = True)
                         .filter( (pl.col("TaxRate_Outliers") == 'Middle 96%'))
-                        #   (pl.col("SaleRecordingYear") == 2021) # & (pl.col("Tax_Sale_NotNull") == 1)
-                        # (pl.col('TaxYearMatchSaleRecordingYear') == 1)  &
-                        .group_by(geo_list + [s_bin] + ["SaleRecordingYear"]) 
+                        .group_by(geo_list + [s_bin] + ["SaleRecordingYear"])
                         .agg([
                             pl.count(),
                             pl.col('PropertyID').n_unique().alias('PropertyID_nunique'),
@@ -568,6 +588,19 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
             ).collect(streaming=True)
             snapshot_agg.write_parquet(Path(output_dir) / 'agg_snapshot' / f'{geo_list[0]}_{s_bin}_snapshot.parquet', use_pyarrow=True, compression="snappy")
 
+    logging.info(f"Sinking sales_pooled_staging.parquet")
+    if not (Path(output_dir) / 'sales_pooled_staging.parquet').exists():
+        (sales_data
+            .filter(pl.col('MostRecentSale') == 1)
+            .join(annual_tax_data, left_on='PropertyID', right_on ='PropertyID', how="inner")
+            .filter(pl.col("PropertyClassID") == 'R')
+            .filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
+            .join(xwalk_data, left_on='PropertyID', right_on ='PropertyID', how="inner")
+            .join(hpi_data.select(['county_fips','year','hpi_index_2021']), left_on=['FIPS','SaleRecordingYear'], right_on =['county_fips','year'], how="inner")
+        ).sink_parquet(Path(output_dir) / 'sales_pooled_staging.parquet', compression="snappy")
+    logging.info(f"Sink sales_pooled_staging.parquet successful")
+    logging.info('Memory usage: ' + mem_profile())
+
     logging.info('Pooled collect -- memory usage: ' + mem_profile())
     if not (Path(output_dir) / 'sales_taxes_pooled.parquet').exists():
         sales_unified_pooled = (pl.scan_parquet(Path(output_dir) / 'sales_pooled_staging.parquet', low_memory = True)
@@ -579,12 +612,11 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                             (pl.col('TaxAmt') * (pl.col('hpi_index_2021'))).alias("TaxAmt_Pooled_HPI2021")
                         ])
                         .with_columns([
-                            # (pl.when((pl.col("TaxAmt_Pooled_HPI2021").is_not_null()) & (pl.col("SaleAmt_HPI2021").is_not_null())).then(1).otherwise(0).alias("TaxPooled_Sale_NotNull")),
                             (pl.col('TaxAmt_Pooled_HPI2021') / pl.col('SaleAmt_HPI2021')).alias('TaxRate_Pooled')
                         ])
                         .with_columns([
-                            ((pl.col('SaleAmt_HPI2021').percentile().over(['SaleRecordingYear', 'FIPS', 'PropertyClassID'])) * 100).ceil().alias("SaleAmt_PooledPercentile"),
-                            ((pl.col('TaxRate_Pooled').percentile().over(['SaleRecordingYear', 'FIPS', 'PropertyClassID'])) * 100).ceil().alias("TaxRate_PooledPercentile"),
+                            ((pl.col('SaleAmt_HPI2021').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("SaleAmt_PooledPercentile"),
+                            ((pl.col('TaxRate_Pooled').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("TaxRate_PooledPercentile"),
                         ])
                         .with_columns([
                             (pl.col("SaleAmt_PooledPercentile") / 10).ceil().alias("SaleAmt_PooledDecile"),
@@ -593,20 +625,30 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                             (pl.col("TaxRate_PooledPercentile") / 20).ceil().alias("TaxRate_PooledQuintile")
                         ])
                         .with_columns([
-                            (pl.when((pl.col('SaleAmt_HPI2021') < 100000)).then(pl.lit("1 - <$100K"))
-                                .when((pl.col('SaleAmt_HPI2021') >= 100000) & (pl.col('SaleAmt_HPI2021') <= 200000)).then(pl.lit("2 - $100K-$200K"))
-                                .when((pl.col('SaleAmt_HPI2021') > 200000) & (pl.col('SaleAmt_HPI2021') < 250000)).then(pl.lit("3 - $200K-$250K"))
-                                .when((pl.col('SaleAmt_HPI2021') >= 250000) & (pl.col('SaleAmt_HPI2021') <= 350000)).then(pl.lit("4 - $250K-$350K"))
-                                .when((pl.col('SaleAmt_HPI2021') > 350000) & (pl.col('SaleAmt_HPI2021') < 1000000)).then(pl.lit("5 - $350K-$1M"))
-                                .when((pl.col('SaleAmt_HPI2021') >= 1000000)).then(pl.lit("6 - >$1M"))
+                            (pl.when((pl.col('SaleAmt') < 100000)).then(pl.lit("1 - <$100K"))
+                                .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') <= 200000)).then(pl.lit("2 - $100K-$200K"))
+                                .when((pl.col('SaleAmt') > 200000) & (pl.col('SaleAmt') < 250000)).then(pl.lit("3 - $200K-$250K"))
+                                .when((pl.col('SaleAmt') >= 250000) & (pl.col('SaleAmt') <= 350000)).then(pl.lit("4 - $250K-$350K"))
+                                .when((pl.col('SaleAmt') > 350000)).then(pl.lit("5 - >$350K"))
                                 .otherwise(None).alias("LincolnSale_BinsWide")),
-                            (pl.when((pl.col('SaleAmt_HPI2021') < 120000)).then(pl.lit("1 - <$120K"))
-                                .when((pl.col('SaleAmt_HPI2021') >= 120000) & (pl.col('SaleAmt_HPI2021') <= 180000)).then(pl.lit("2 - $120K-$180K"))
-                                .when((pl.col('SaleAmt_HPI2021') > 180000) & (pl.col('SaleAmt_HPI2021') < 270000)).then(pl.lit("3 - $180K-$270K"))
-                                .when((pl.col('SaleAmt_HPI2021') >= 270000) & (pl.col('SaleAmt_HPI2021') <= 330000)).then(pl.lit("4 - $270K-$330K"))
-                                .when((pl.col('SaleAmt_HPI2021') > 330000) & (pl.col('SaleAmt_HPI2021') < 1000000)).then(pl.lit("5 - $330K-$1M"))
-                                .when((pl.col('SaleAmt_HPI2021') >= 1000000)).then(pl.lit("6 - >$1M"))
+                            (pl.when((pl.col('SaleAmt') < 120000)).then(pl.lit("1 - <$120K"))
+                                .when((pl.col('SaleAmt') >= 120000) & (pl.col('SaleAmt') <= 180000)).then(pl.lit("2 - $120K-$180K"))
+                                .when((pl.col('SaleAmt') > 180000) & (pl.col('SaleAmt') < 270000)).then(pl.lit("3 - $180K-$270K"))
+                                .when((pl.col('SaleAmt') >= 270000) & (pl.col('SaleAmt') <= 330000)).then(pl.lit("4 - $270K-$330K"))
+                                .when((pl.col('SaleAmt') > 330000)).then(pl.lit("5 - >$330K"))
                                 .otherwise(None).alias("LincolnSale_BinsNarrow")),
+                            (pl.when((pl.col('SaleAmt') < 100000)).then(pl.lit("1 - <$100K"))
+                                .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') < 200000)).then(pl.lit("2 - $100K-$200K"))
+                                .when((pl.col('SaleAmt') >= 200000) & (pl.col('SaleAmt') < 300000)).then(pl.lit("3 - $200K-$300K"))
+                                .when((pl.col('SaleAmt') >= 300000) & (pl.col('SaleAmt') < 400000)).then(pl.lit("4 - $300K-$400K"))
+                                .when((pl.col('SaleAmt') >= 400000) & (pl.col('SaleAmt') < 500000)).then(pl.lit("5 - $400K-$500K"))
+                                .when((pl.col('SaleAmt') >= 500000) & (pl.col('SaleAmt') < 600000)).then(pl.lit("6 - $500K-$600K"))
+                                .when((pl.col('SaleAmt') >= 600000) & (pl.col('SaleAmt') < 700000)).then(pl.lit("7 - $600K-$700K"))
+                                .when((pl.col('SaleAmt') >= 700000) & (pl.col('SaleAmt') < 800000)).then(pl.lit("8 - $700K-$800K"))
+                                .when((pl.col('SaleAmt') >= 800000) & (pl.col('SaleAmt') < 900000)).then(pl.lit("9 - $800K-$900K"))
+                                .when((pl.col('SaleAmt') >= 900000) & (pl.col('SaleAmt') < 1000000)).then(pl.lit("10 - $900K-$1M"))
+                                .when((pl.col('SaleAmt') >= 1000000)).then(pl.lit("11 - >$1M"))
+                                .otherwise(None).alias("SaleBins")),
                             (pl.lit("Total")).alias("Total"),
                         ])
                         .with_columns([
@@ -628,7 +670,6 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
             print(p_bin)
             pooled_agg = (pl.scan_parquet(Path(output_dir) / 'sales_taxes_pooled.parquet', low_memory = True)
                     .filter((pl.col("TaxRate_Pooled_Outliers") == 'Middle 96%') )
-                    # & (pl.col("TaxPooled_Sale_NotNull") == 1) (pl.col('MostRecentSale') == 1) & 
                     .group_by(geo_list + [p_bin])
                     .agg([
                         pl.count(),
