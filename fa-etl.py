@@ -130,6 +130,7 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
             .with_columns([
                 (pl.col('PropertyID').cast(pl.Int64)),
                 (pl.col('FIPS').cast(pl.Utf8).str.rjust(5, "0")),
+                # (pl.col('FIPS').cast(pl.Int32).alias('FIPS_index')),
                 (pl.col("FATimeStamp").cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
                 (pl.col('CurrentSaleRecordingDate').cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
                 (pl.col("AssdYear").cast(pl.Int16)),
@@ -251,12 +252,10 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
         annual = (pl.scan_parquet(Path(input_dir) / annual_parquet, low_memory = True)
                 .select(['PropertyID']))
         annual_anti = annual.join(crosswalk, left_on='PropertyID', right_on ='PropertyID', how='anti')
-
         check_annual_anti = annual_anti.collect(streaming=True)
-
         logging.info(f'{check_annual_anti.shape[0]} missing PropertyIDs in crosswalk.parquet.')
-        if check_annual_anti.shape[0] > 0: # comment off for testing
-            build_xwalk = True
+        #if check_annual_anti.shape[0] > 0: # comment off for testing # UNCOMMENT FOR PRODUCTION
+        #    build_xwalk = True
 
     if build_xwalk is True:
         t0 = time.time()
@@ -341,7 +340,8 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
 
     logging.info('Memory usage: ' + mem_profile())
     logging.info(f"Scanning {sale_2_parquet}.")
-    sale_cols = ['PropertyID', 'SaleRecordingYear', 'SaleAmt', 'SalesPriceCode', 'TransferTax', 'FATransactionID', 'FirstMtgAmt', 'FATransactionID_1', 'RecordingYear', 'SaleYear', 'RecentSaleByYear', 'MostRecentSale', 'SaleFlag']
+    # 'SalesPriceCode', 'TransferTax', 'FirstMtgAmt', 'FATransactionID_1', 'RecordingYear', 'SaleYear',
+    sale_cols = ['PropertyID', 'SaleRecordingYear', 'SaleAmt', 'FATransactionID', 'RecentSaleByYear', 'MostRecentSale', 'SaleFlag']
     sales_data = (pl.scan_parquet(Path(input_dir) / sale_2_parquet, low_memory = True)
                         .select(sale_cols)
                         .filter(pl.col('PropertyID').is_not_null())
@@ -349,7 +349,7 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
                         .filter(pl.col("SaleFlag") == 1)
                         .filter(pl.col('RecentSaleByYear') == 1)
                         .filter((pl.col("SaleAmt").is_not_null()) & (pl.col("SaleAmt") > 0))
-                        .select(pl.all().exclude(['SalesPriceCode', 'TransferTax', 'FirstMtgAmt', 'FATransactionID_1', 'SaleFlag', 'RecentSaleByYear']))
+                        .select(pl.all().exclude(['SaleFlag']))
                     )
 
     # sales_count_data = (pl.scan_parquet(Path(input_dir) / sale_2_parquet, low_memory = True)
@@ -361,7 +361,8 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
     #                     .agg([pl.count().alias("SaleYearCount")]))
 
     logging.info(f"Scanning {annual_parquet}.")
-    annual_tax_cols = ['PropertyID', 'APN', 'APNSeqNbr', 'PropertyClassID', 'LandUseCode', 'FIPS', 'TaxYear', 'TaxAmt',  "CurrentSaleRecordingYear", "CurrentSalesPrice"]
+    # 'APNSeqNbr', 'LandUseCode',
+    annual_tax_cols = ['PropertyID', 'APN', 'PropertyClassID',  'FIPS', 'TaxYear', 'TaxAmt',  "CurrentSaleRecordingYear", "CurrentSalesPrice", "AssdYear", "AssdTotalValue", "MarketYear", "MarketTotalValue"]
     annual_tax_data = (pl.scan_parquet(Path(input_dir) / annual_parquet, low_memory = True)
                                 .select(annual_tax_cols)
                                 .filter((pl.col('PropertyID').is_not_null()))
@@ -371,8 +372,8 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
 
     # annual_cols_static = ['PropertyID', 'APN', 'APNSeqNbr', 'PropertyClassID', 'LandUseCode', 'FIPS', 'TaxYear', 'TaxAmt',  "CurrentSaleRecordingYear", "CurrentSalesPrice"]
     # # 'SitusLatitude', 'SitusLongitude', 'SitusCensusTract', 'SitusCensusBlock',
-    # # 'LotSizeDepthFeet', 'LotSizeAcres',  'BuildingAreaInd',  'Bedrooms', 'BathTotalCalc', 
-    # # 'LotSizeSqFt', 'BuildingArea', 'SumBuildingSqFt', 'TotalRooms', 'SumResidentialUnits', 'SumBuildingsNbr', 
+    # # 'LotSizeDepthFeet', 'LotSizeAcres',  'BuildingAreaInd',  'Bedrooms', 'BathTotalCalc',
+    # # 'LotSizeSqFt', 'BuildingArea', 'SumBuildingSqFt', 'TotalRooms', 'SumResidentialUnits', 'SumBuildingsNbr',
     # annual_static_data = (pl.scan_parquet(Path(input_dir) / annual_parquet, low_memory = True)
     #                             .select(annual_cols_static)
     #                             .filter((pl.col('PropertyID').is_not_null()))
@@ -445,6 +446,7 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
 
     hpi_data = (pl.scan_parquet(Path(xwalk_dir) / 'county_hpi.parquet', low_memory = True)
                             .with_columns([(pl.col('year').cast(pl.Int16))])
+                            .filter(pl.col('year') >= 2019)
                             )
 
     logging.info(f"Creating unified sales data. {mem_profile()}. Scanning join.")
@@ -467,237 +469,259 @@ def main(log_file: Path, input_dir: Path, annual_file: str, sale_file: str, hist
     # logging.info(f"Sink timeseries_av_sales.parquet successful")
     # logging.info('Memory usage: ' + mem_profile())
 
-    logging.info(f"Sinking sales_snapshot_staging.parquet")
-    if not (Path(output_dir) / 'sales_snapshot_staging.parquet').exists():
-        (sales_data
+    #logging.info(f"Sinking sales_snapshot_staging.parquet")
+    #if not (Path(output_dir) / 'sales_snapshot_staging.parquet').exists():
+    logging.info(f"Sinking sales_staging.parquet")
+    if not (Path(output_dir) / 'sales_staging.parquet').exists():
+        sales_data_staging = (sales_data
             .join(annual_tax_data, left_on=['PropertyID', 'SaleRecordingYear'], right_on =['PropertyID', 'TaxYear'], how="inner")
-            .filter(pl.col("PropertyClassID") == 'R')
-            .filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
+            #.filter(pl.col("PropertyClassID") == 'R')
+            #.filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
             .join(xwalk_data, left_on='PropertyID', right_on ='PropertyID', how="inner")
-        ).sink_parquet(Path(output_dir) / 'sales_snapshot_staging.parquet', compression="snappy")
-    logging.info(f"Sink sales_snapshot_staging.parquet successful. {mem_profile()}.")
+            .join(hpi_data.select(['county_fips','year','hpi_index_2021']).rename({"hpi_index_2021": "hpi_index_2021_sale"}), left_on=['FIPS','SaleRecordingYear'], right_on =['county_fips','year'], how="inner")
+            .join(hpi_data.select(['county_fips','year','hpi_index_2021']).rename({"hpi_index_2021": "hpi_index_2021_assd"}), left_on=['FIPS','AssdYear'], right_on =['county_fips','year'], how="left")
+            .join(hpi_data.select(['county_fips','year','hpi_index_2021']).rename({"hpi_index_2021": "hpi_index_2021_market"}), left_on=['FIPS','MarketYear'], right_on =['county_fips','year'], how="left")
+        ).sink_parquet(Path(output_dir) / 'sales_staging.parquet', compression="snappy")
+        #).collect(streaming=True)
+        #sales_data_staging.write_parquet(file = Path(output_dir) / 'sales_staging.parquet', use_pyarrow=True, compression="snappy")
+        #del sales_data_staging
+        #).sink_parquet(Path(output_dir) / 'sales_snapshot_staging.parquet', compression="snappy")
+    logging.info(f"Sink sales_staging.parquet successful. {mem_profile()}.")
 
     # Places where market value should be used instead of assd value
     # KS, NC, PA, NY, TX, SC, KY, AZ
     # ['20', '37', '42', '36', '48', '45', '21', '40']
     # ['20121', '37065', '42101', '36061', '48203', '48255', '48191', '45041']
 
-    os.makedirs(Path(output_dir) / 'agg_pooled', exist_ok = True)
-    os.makedirs(Path(output_dir) / 'agg_snapshot', exist_ok = True)
-
-    geo_dict = {'state':  ['state_fips', 'state_codes', 'state_name'],
-                'county': ['county_fips', 'county_name', 'state_codes', 'state_fips', 'state_name'],
-                'cbsa':   ['cbsa_fips', 'cbsa_title'],
-                'city':   ['city_geoid', 'city_name', 'city_state_code', 'city_population2020', 'city_population2022', 'city_rank', 'city_places_area_m2']}
-
-    pooled_bins =   ["Total", "SaleBins", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_PooledPercentile", "SaleAmt_PooledDecile", "SaleAmt_PooledQuintile"]
-    snapshot_bins = ["Total", "SaleBins", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_Percentile", "SaleAmt_Decile", "SaleAmt_Quintile"]
+    #os.makedirs(Path(output_dir) / 'agg_pooled', exist_ok = True)
+    #os.makedirs(Path(output_dir) / 'agg_snapshot', exist_ok = True)
+    os.makedirs(Path(output_dir) / 'queries', exist_ok = True)
 
     def _percentile(self:pl.Expr, method='ordinal')-> pl.Expr:
         return self.rank(descending=True, method=method) / self.count()
     pl.Expr.percentile = _percentile
 
-    logging.info('Snapshot collect -- memory usage: ' + mem_profile())
-    if not (Path(output_dir) / 'sales_taxes_snapshot.parquet').exists():
-        sales_unified_snapshot = (pl.scan_parquet(Path(output_dir) / 'sales_snapshot_staging.parquet', low_memory = True)
-                        .filter(pl.col("PropertyClassID") == 'R')
-                        .filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
+# add two more loops
+    # pooled years and snapshot
+    # force everything to be hpi adjusted
+
+    #logging.info('Snapshot collect -- memory usage: ' + mem_profile())
+    #if not (Path(output_dir) / 'sales_taxes_snapshot.parquet').exists():
+    logging.info('Staging collect -- memory usage: ' + mem_profile())
+    if not (Path(output_dir) / 'sales_staging_tiles.parquet').exists():
+        #sales_unified_snapshot = (pl.scan_parquet(Path(output_dir) / 'sales_snapshot_staging.parquet', low_memory = True)
+        sales_unified = (pl.scan_parquet(Path(output_dir) / 'sales_staging.parquet', low_memory = True)
                         .with_columns([
-                            (pl.col('TaxAmt') / pl.col('SaleAmt')).alias('TaxRate')
+                            (pl.col('TaxAmt') / pl.col('SaleAmt')).alias('TaxRate'),
+                            (pl.col('SaleAmt') * (pl.col('hpi_index_2021_sale'))).alias('SaleAmt_HPI2021'),
+                            (pl.col('TaxAmt') * (pl.col('hpi_index_2021_sale'))).alias('TaxAmt_HPI2021'),
+                            (pl.col('AssdTotalValue') * (pl.col('hpi_index_2021_assd'))).alias('AssdTotalValue_HPI2021'),
+                            (pl.col('MarketTotalValue') * (pl.col('hpi_index_2021_market'))).alias('MarketTotalValue_HPI2021'),
+                            ])
+                        .with_columns([
+                            (pl.when(((pl.col('AssdTotalValue') == 0) | (pl.col('AssdTotalValue').is_null())) & (pl.col('MarketTotalValue') > 0)).then(pl.col('MarketTotalValue_HPI2021')).otherwise(pl.col('AssdTotalValue_HPI2021'))).alias('AssdTotalValue_HPI2021_Imputed')
                         ])
                         .with_columns([
-                            ((pl.col('SaleAmt').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("SaleAmt_Percentile"),
-                            ((pl.col('TaxRate').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("TaxRate_Percentile")
+                            (pl.col('TaxAmt_HPI2021') / pl.col('SaleAmt_HPI2021')).alias('TaxRate_HPI2021'),
+                            (pl.col('AssdTotalValue_HPI2021_Imputed') / pl.col('SaleAmt_HPI2021')).alias('AssdValue_SaleAmt_Ratio'),
+                            (pl.col('TaxAmt_HPI2021') / (pl.col('AssdTotalValue_HPI2021_Imputed') / pl.col('SaleAmt_HPI2021'))).alias('TaxAmt_to_AssdValue_SaleAmt_Ratio')
                         ])
+                        #.filter(pl.col("PropertyClassID") == 'R')
+                        #.filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
+                        #.with_columns([
+                        #    (pl.col('TaxAmt') / pl.col('SaleAmt')).alias('TaxRate')
+                        #])
                         .with_columns([
-                            (pl.col("SaleAmt_Percentile") / 10).ceil().alias("SaleAmt_Decile"),
-                            (pl.col("TaxRate_Percentile") / 10).ceil().alias("TaxRate_Decile"),
-                            (pl.col("SaleAmt_Percentile") / 20).ceil().alias("SaleAmt_Quintile"),
-                            (pl.col("TaxRate_Percentile") / 20).ceil().alias("TaxRate_Quintile")
+                            ((pl.col('SaleAmt').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("SaleAmt_County_Percentile"),
+                            ((pl.col('TaxRate').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("TaxRate_County_Percentile"),
+                            (pl.when(pl.col("SaleRecordingYear") < 2019).then(pl.lit("Pre-2019")).otherwise(pl.lit("Post-2019"))).alias("SaleRecordingYear_Bins")
                         ])
+                        #.with_columns([
+                        #    #(pl.col("SaleAmt_County_Percentile") / 10).ceil().alias("SaleAmt_County_Decile"),
+                        #    #(pl.col("SaleAmt_County_Percentile") / 20).ceil().alias("SaleAmt_County_Quintile"),
+                        #    #(pl.col("TaxRate_County_Percentile") / 10).ceil().alias("TaxRate_County_Decile"),
+                        #    #(pl.col("TaxRate_County_Percentile") / 20).ceil().alias("TaxRate_County_Quintile")
+                        #])
                         .with_columns([
-                            (pl.when((pl.col('SaleAmt') < 100000)).then(pl.lit("1 - <$100K"))
-                                .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') <= 200000)).then(pl.lit("2 - $100K-$200K"))
-                                .when((pl.col('SaleAmt') > 200000) & (pl.col('SaleAmt') < 250000)).then(pl.lit("3 - $200K-$250K"))
-                                .when((pl.col('SaleAmt') >= 250000) & (pl.col('SaleAmt') <= 350000)).then(pl.lit("4 - $250K-$350K"))
-                                .when((pl.col('SaleAmt') > 350000)).then(pl.lit("5 - >$350K"))
+                            (pl.when((pl.col('SaleAmt_HPI2021') < 100000)).then(pl.lit("1 - <$100K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 100000) & (pl.col('SaleAmt_HPI2021') <= 200000)).then(pl.lit("2 - $100K-$200K"))
+                                .when((pl.col('SaleAmt_HPI2021') > 200000) & (pl.col('SaleAmt_HPI2021') < 250000)).then(pl.lit("3 - $200K-$250K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 250000) & (pl.col('SaleAmt_HPI2021') <= 350000)).then(pl.lit("4 - $250K-$350K"))
+                                .when((pl.col('SaleAmt_HPI2021') > 350000)).then(pl.lit("5 - >$350K"))
                                 .otherwise(None).alias("LincolnSale_BinsWide")),
-                            (pl.when((pl.col('SaleAmt') < 120000)).then(pl.lit("1 - <$120K"))
-                                .when((pl.col('SaleAmt') >= 120000) & (pl.col('SaleAmt') <= 180000)).then(pl.lit("2 - $120K-$180K"))
-                                .when((pl.col('SaleAmt') > 180000) & (pl.col('SaleAmt') < 270000)).then(pl.lit("3 - $180K-$270K"))
-                                .when((pl.col('SaleAmt') >= 270000) & (pl.col('SaleAmt') <= 330000)).then(pl.lit("4 - $270K-$330K"))
-                                .when((pl.col('SaleAmt') > 330000)).then(pl.lit("5 - >$330K"))
+                            (pl.when((pl.col('SaleAmt_HPI2021') < 120000)).then(pl.lit("1 - <$120K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 120000) & (pl.col('SaleAmt_HPI2021') <= 180000)).then(pl.lit("2 - $120K-$180K"))
+                                .when((pl.col('SaleAmt_HPI2021') > 180000) & (pl.col('SaleAmt_HPI2021') < 270000)).then(pl.lit("3 - $180K-$270K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 270000) & (pl.col('SaleAmt_HPI2021') <= 330000)).then(pl.lit("4 - $270K-$330K"))
+                                .when((pl.col('SaleAmt_HPI2021') > 330000)).then(pl.lit("5 - >$330K"))
                                 .otherwise(None).alias("LincolnSale_BinsNarrow")),
-                            (pl.when((pl.col('SaleAmt') < 100000)).then(pl.lit("1 - <$100K"))
-                                .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') < 200000)).then(pl.lit("2 - $100K-$200K"))
-                                .when((pl.col('SaleAmt') >= 200000) & (pl.col('SaleAmt') < 300000)).then(pl.lit("3 - $200K-$300K"))
-                                .when((pl.col('SaleAmt') >= 300000) & (pl.col('SaleAmt') < 400000)).then(pl.lit("4 - $300K-$400K"))
-                                .when((pl.col('SaleAmt') >= 400000) & (pl.col('SaleAmt') < 500000)).then(pl.lit("5 - $400K-$500K"))
-                                .when((pl.col('SaleAmt') >= 500000) & (pl.col('SaleAmt') < 600000)).then(pl.lit("6 - $500K-$600K"))
-                                .when((pl.col('SaleAmt') >= 600000) & (pl.col('SaleAmt') < 700000)).then(pl.lit("7 - $600K-$700K"))
-                                .when((pl.col('SaleAmt') >= 700000) & (pl.col('SaleAmt') < 800000)).then(pl.lit("8 - $700K-$800K"))
-                                .when((pl.col('SaleAmt') >= 800000) & (pl.col('SaleAmt') < 900000)).then(pl.lit("9 - $800K-$900K"))
-                                .when((pl.col('SaleAmt') >= 900000) & (pl.col('SaleAmt') < 1000000)).then(pl.lit("10 - $900K-$1M"))
-                                .when((pl.col('SaleAmt') >= 1000000)).then(pl.lit("11 - >$1M"))
+                            (pl.when((pl.col('SaleAmt_HPI2021') < 100000)).then(pl.lit("1 - <$100K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 100000) & (pl.col('SaleAmt_HPI2021') < 200000)).then(pl.lit("2 - $100K-$200K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 200000) & (pl.col('SaleAmt_HPI2021') < 300000)).then(pl.lit("3 - $200K-$300K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 300000) & (pl.col('SaleAmt_HPI2021') < 400000)).then(pl.lit("4 - $300K-$400K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 400000) & (pl.col('SaleAmt_HPI2021') < 500000)).then(pl.lit("5 - $400K-$500K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 500000) & (pl.col('SaleAmt_HPI2021') < 600000)).then(pl.lit("6 - $500K-$600K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 600000) & (pl.col('SaleAmt_HPI2021') < 700000)).then(pl.lit("7 - $600K-$700K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 700000) & (pl.col('SaleAmt_HPI2021') < 800000)).then(pl.lit("8 - $700K-$800K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 800000) & (pl.col('SaleAmt_HPI2021') < 900000)).then(pl.lit("9 - $800K-$900K"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 900000) & (pl.col('SaleAmt_HPI2021') < 1000000)).then(pl.lit("10 - $900K-$1M"))
+                                .when((pl.col('SaleAmt_HPI2021') >= 1000000)).then(pl.lit("11 - >$1M"))
                                 .otherwise(None).alias("SaleBins")),
                             (pl.lit("Total")).alias("Total"),
                         ])
                         .with_columns([
-                            (pl.when((pl.col("SaleAmt_Percentile") <= 2) | (pl.col("SaleAmt_Percentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("Sale_Outliers"),
-                            (pl.when((pl.col("TaxRate_Percentile") <= 2) | (pl.col("TaxRate_Percentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("TaxRate_Outliers")
+                            (pl.when((pl.col("SaleAmt_County_Percentile") <= 2) | (pl.col("SaleAmt_County_Percentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("Sale_Outliers"),
+                            (pl.when((pl.col("TaxRate_County_Percentile") <= 2) | (pl.col("TaxRate_County_Percentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("TaxRate_Outliers")
                         ])
                         ).collect(streaming=True)
 
         logging.info('Writing snapshot -- ' + mem_profile())
-        sales_unified_snapshot.write_parquet(file = Path(output_dir) / 'sales_taxes_snapshot.parquet', use_pyarrow=True, compression="snappy")
+        #sales_unified_snapshot.write_parquet(file = Path(output_dir) / 'sales_taxes_snapshot.parquet', use_pyarrow=True, compression="snappy")
+        sales_unified.write_parquet(file = Path(output_dir) / 'sales_staging_tiles.parquet', use_pyarrow=True, compression="snappy")
+        del sales_unified
 
-    for geo_group, geo_list in geo_dict.items():
-        logging.info(f"Aggregating snapshot: {geo_group}")
-        print(geo_group)
-        print(geo_list[0])
-        for s_bin in snapshot_bins:
-            print(s_bin)
-            snapshot_agg = (pl.scan_parquet(Path(output_dir) / 'sales_taxes_snapshot.parquet', low_memory = True)
-                        .filter( (pl.col("TaxRate_Outliers") == 'Middle 96%'))
-                        .group_by(geo_list + [s_bin] + ["SaleRecordingYear"])
-                        .agg([
-                            pl.count(),
-                            pl.col('PropertyID').n_unique().alias('PropertyID_nunique'),
-                            pl.col('TaxAmt').is_not_null().count().alias('TaxAmt_notnull'),
-                            pl.col('SaleAmt').is_not_null().count().alias('SaleAmt_notnull'),
-                            pl.col('TaxAmt').sum().alias('TaxAmt_sum'),
-                            pl.col('SaleAmt').sum().alias('SaleAmt_sum'),
-                            pl.col('TaxAmt').mean().alias('TaxAmt_mean'),
-                            pl.col('SaleAmt').mean().alias('SaleAmt_mean'),
-                            pl.col('TaxRate').mean().alias('TaxRate_mean'),
-                            pl.col('TaxAmt').median().alias('TaxAmt_median'),
-                            pl.col('SaleAmt').median().alias('SaleAmt_median'),
-                            pl.col('TaxRate').median().alias('TaxRate_median'),
-                            pl.col('TaxAmt').std().alias('TaxAmt_std'),
-                            pl.col('SaleAmt').std().alias('SaleAmt_std'),
-                            pl.col('TaxRate').std().alias('TaxRate_std')
+    #pooled_bins =   ["Total", "SaleBins", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_PooledPercentile", "SaleAmt_PooledDecile", "SaleAmt_PooledQuintile"]
+    #snapshot_bins = ["Total", "SaleBins", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow", "SaleAmt_Percentile", "SaleAmt_Decile", "SaleAmt_Quintile"]
+
+    geo_dict = {#'state':  ['state_fips', 'state_codes', 'state_name'],
+                #'county': ['county_fips', 'county_name', 'state_codes', 'state_fips', 'state_name'],
+                #'cbsa':   ['cbsa_fips', 'cbsa_title'],
+                'city':   ['city_geoid', 'city_name', 'city_state_code', 'city_population2020', 'city_population2022', 'city_rank', 'city_places_area_m2']}
+
+    sale_bins = ["Total", "SaleBins", "LincolnSale_BinsWide", "LincolnSale_BinsNarrow"]
+    time_bins = ["SaleRecordingYear", "SaleRecordingYear_Bins"]
+
+    for t_bin in time_bins:
+        if t_bin == "SaleRecordingYear":
+            hpi_adj = ''
+            t_label = 'Snapshot'
+            recency_filter = 'RecentSaleByYear'
+        elif t_bin == "SaleRecordingYear_Bins":
+            hpi_adj = '_HPI2021'
+            t_label = 'Pooled'
+            recency_filter = 'MostRecentSale'
+        else:
+            logging.info(f"Error: {t_bin} not found.")
+
+        for geo_group, geo_list in geo_dict.items():
+            logging.info(f"Aggregating query: {geo_group}")
+            print(geo_group)
+            print(geo_list[0])
+            for s_bin in sale_bins:
+                print(s_bin)
+                query_out = (pl.scan_parquet(Path(output_dir) / 'sales_staging_tiles.parquet', low_memory = True)
+                            .filter( (pl.col("TaxRate_Outliers") == 'Middle 96%'))
+                            .filter( (pl.col(recency_filter) == 1))
+                            .group_by(geo_list + [s_bin] + [t_bin])
+                            .agg([
+                                pl.count(),
+                                pl.col('PropertyID').n_unique().alias('PropertyID_nunique'),
+                                pl.col(f'TaxAmt{hpi_adj}').is_not_null().count().alias('TaxAmt_notnull'),
+                                pl.col(f'SaleAmt{hpi_adj}').is_not_null().count().alias('SaleAmt_notnull'),
+                                # TaxAmt
+                                pl.col(f'TaxAmt{hpi_adj}').sum().alias('TaxAmt_sum'),
+                                pl.col(f'TaxAmt{hpi_adj}').mean().alias('TaxAmt_mean'),
+                                pl.col(f'TaxAmt{hpi_adj}').median().alias('TaxAmt_median'),
+                                pl.col(f'TaxAmt{hpi_adj}').std().alias('TaxAmt_std'),
+                                # TaxRate
+                                pl.col(f'TaxRate{hpi_adj}').mean().alias('TaxRate_mean'),
+                                pl.col(f'TaxRate{hpi_adj}').median().alias('TaxRate_median'),
+                                pl.col(f'TaxRate{hpi_adj}').std().alias('TaxRate_std'),
+                                # SaleAmt
+                                pl.col(f'SaleAmt{hpi_adj}').sum().alias('SaleAmt_sum'),
+                                pl.col(f'SaleAmt{hpi_adj}').mean().alias('SaleAmt_mean'),
+                                pl.col(f'SaleAmt{hpi_adj}').median().alias('SaleAmt_median'),
+                                pl.col(f'SaleAmt{hpi_adj}').std().alias('SaleAmt_std'),
+                                # AssdTotalValue
+                                pl.col('AssdTotalValue_HPI2021_Imputed').sum().alias('AssdTotalValue_HPI2021_Imputed_sum'),
+                                pl.col('AssdTotalValue_HPI2021_Imputed').mean().alias('AssdTotalValue_HPI2021_Imputed_mean'),
+                                pl.col('AssdTotalValue_HPI2021_Imputed').median().alias('AssdTotalValue_HPI2021_Imputed_median'),
+                                pl.col('AssdTotalValue_HPI2021_Imputed').std().alias('AssdTotalValue_HPI2021_Imputed_std'),
+                                # AssdValue_SaleAmt_Ratio
+                                pl.col('AssdValue_SaleAmt_Ratio').mean().alias('AssdValue_SaleAmt_Ratio_mean'),
+                                pl.col('AssdValue_SaleAmt_Ratio').median().alias('AssdValue_SaleAmt_Ratio_median'),
+                                pl.col('AssdValue_SaleAmt_Ratio').std().alias('AssdValue_SaleAmt_Ratio_std'),
+                                # TaxAmt_to_AssdValue_SaleAmt_Ratio
+                                pl.col('TaxAmt_to_AssdValue_SaleAmt_Ratio').mean().alias('TaxAmt_to_AssdValue_SaleAmt_Ratio_mean'),
+                                pl.col('TaxAmt_to_AssdValue_SaleAmt_Ratio').median().alias('TaxAmt_to_AssdValue_SaleAmt_Ratio_median'),
+                                pl.col('TaxAmt_to_AssdValue_SaleAmt_Ratio').median().alias('TaxAmt_to_AssdValue_SaleAmt_Ratio_std')
+                                ])
+                            .with_columns([
+                                (pl.col('TaxAmt_sum') / pl.col('SaleAmt_sum')).alias('TaxRate'),
+                                (pl.col('AssdTotalValue_HPI2021_Imputed_sum') / pl.col('SaleAmt_sum')).alias('AssdValue_SaleAmt_Ratio')
                             ])
-                        .with_columns([
-                            (pl.col('TaxAmt_sum') / pl.col('SaleAmt_sum')).alias('TaxRate'),
-                        ])
-                        .with_columns([
-                            (pl.col('SaleAmt_sum').over(geo_list).sum().alias('SaleAmt_Total')),
-                            (pl.col('count').over(geo_list).sum().alias('count_Total'))
-                        ])
-                        .sort('count', geo_list[0], s_bin, descending=[True, False, True])
-            ).collect(streaming=True)
-            snapshot_agg.write_parquet(Path(output_dir) / 'agg_snapshot' / f'{geo_list[0]}_{s_bin}_snapshot.parquet', use_pyarrow=True, compression="snappy")
+                            .with_columns([
+                                (pl.col('SaleAmt_sum').over(geo_list).sum().alias('SaleAmt_Total')),
+                                (pl.col('count').over(geo_list).sum().alias('count_Total'))
+                            ])
+                            .sort(geo_list[0], s_bin, descending=[False, False])
+                ).collect(streaming=True)
+                query_out.write_parquet(Path(output_dir) / 'queries' / f'{t_label}_{geo_list[0]}_{s_bin}_query.parquet', use_pyarrow=True, compression="snappy")
+                query_out.write_csv(Path(output_dir) / 'queries' / f'{t_label}_{geo_list[0]}_{s_bin}_query.csv')
 
-    logging.info(f"Sinking sales_pooled_staging.parquet")
-    if not (Path(output_dir) / 'sales_pooled_staging.parquet').exists():
-        (sales_data
-            .filter(pl.col('MostRecentSale') == 1)
-            .join(annual_tax_data, left_on='PropertyID', right_on ='PropertyID', how="inner")
-            .filter(pl.col("PropertyClassID") == 'R')
-            .filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
-            .join(xwalk_data, left_on='PropertyID', right_on ='PropertyID', how="inner")
-            .join(hpi_data.select(['county_fips','year','hpi_index_2021']), left_on=['FIPS','SaleRecordingYear'], right_on =['county_fips','year'], how="inner")
-        ).sink_parquet(Path(output_dir) / 'sales_pooled_staging.parquet', compression="snappy")
-    logging.info(f"Sink sales_pooled_staging.parquet successful")
-    logging.info('Memory usage: ' + mem_profile())
+        for geo_group, geo_list in geo_dict.items():
+            logging.info(f"Aggregating query: {geo_group}")
+            print(geo_group)
+            print(geo_list[0])
+            query_in = (pl.scan_parquet(Path(output_dir) / 'sales_staging_tiles.parquet', low_memory = True)
+                            .filter( (pl.col("TaxRate_Outliers") == 'Middle 96%'))
+                            .filter( (pl.col(recency_filter) == 1))
+                            .with_columns([
+                                ((pl.col(f'SaleAmt{hpi_adj}').percentile().over([t_bin, geo_list[0]])) * 100).ceil().alias(f"SaleAmt_{geo_list[0]}_Percentile"),
+                            ])
+                            .with_columns([
+                                (pl.col(f"SaleAmt_{geo_list[0]}_Percentile") / 10).ceil().alias(f"SaleAmt_Decile"),
+                                (pl.col(f"SaleAmt_{geo_list[0]}_Percentile") / 20).ceil().alias(f"SaleAmt_Quintile")
+                            ]))
 
-    logging.info('Pooled collect -- memory usage: ' + mem_profile())
-    if not (Path(output_dir) / 'sales_taxes_pooled.parquet').exists():
-        sales_unified_pooled = (pl.scan_parquet(Path(output_dir) / 'sales_pooled_staging.parquet', low_memory = True)
-                        .filter(pl.col("PropertyClassID") == 'R')
-                        .filter((pl.col("TaxAmt").is_not_null()) & (pl.col("SaleAmt").is_not_null()))
-                        .filter((pl.col('MostRecentSale') == 1))
-                        .with_columns([
-                            (pl.col('SaleAmt') * (pl.col('hpi_index_2021'))).alias("SaleAmt_HPI2021"),
-                            (pl.col('TaxAmt') * (pl.col('hpi_index_2021'))).alias("TaxAmt_Pooled_HPI2021")
-                        ])
-                        .with_columns([
-                            (pl.col('TaxAmt_Pooled_HPI2021') / pl.col('SaleAmt_HPI2021')).alias('TaxRate_Pooled')
-                        ])
-                        .with_columns([
-                            ((pl.col('SaleAmt_HPI2021').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("SaleAmt_PooledPercentile"),
-                            ((pl.col('TaxRate_Pooled').percentile().over(['SaleRecordingYear', 'FIPS'])) * 100).ceil().alias("TaxRate_PooledPercentile"),
-                        ])
-                        .with_columns([
-                            (pl.col("SaleAmt_PooledPercentile") / 10).ceil().alias("SaleAmt_PooledDecile"),
-                            (pl.col("TaxRate_PooledPercentile") / 10).ceil().alias("TaxRate_PooledDecile"),
-                            (pl.col("SaleAmt_PooledPercentile") / 20).ceil().alias("SaleAmt_PooledQuintile"),
-                            (pl.col("TaxRate_PooledPercentile") / 20).ceil().alias("TaxRate_PooledQuintile")
-                        ])
-                        .with_columns([
-                            (pl.when((pl.col('SaleAmt') < 100000)).then(pl.lit("1 - <$100K"))
-                                .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') <= 200000)).then(pl.lit("2 - $100K-$200K"))
-                                .when((pl.col('SaleAmt') > 200000) & (pl.col('SaleAmt') < 250000)).then(pl.lit("3 - $200K-$250K"))
-                                .when((pl.col('SaleAmt') >= 250000) & (pl.col('SaleAmt') <= 350000)).then(pl.lit("4 - $250K-$350K"))
-                                .when((pl.col('SaleAmt') > 350000)).then(pl.lit("5 - >$350K"))
-                                .otherwise(None).alias("LincolnSale_BinsWide")),
-                            (pl.when((pl.col('SaleAmt') < 120000)).then(pl.lit("1 - <$120K"))
-                                .when((pl.col('SaleAmt') >= 120000) & (pl.col('SaleAmt') <= 180000)).then(pl.lit("2 - $120K-$180K"))
-                                .when((pl.col('SaleAmt') > 180000) & (pl.col('SaleAmt') < 270000)).then(pl.lit("3 - $180K-$270K"))
-                                .when((pl.col('SaleAmt') >= 270000) & (pl.col('SaleAmt') <= 330000)).then(pl.lit("4 - $270K-$330K"))
-                                .when((pl.col('SaleAmt') > 330000)).then(pl.lit("5 - >$330K"))
-                                .otherwise(None).alias("LincolnSale_BinsNarrow")),
-                            (pl.when((pl.col('SaleAmt') < 100000)).then(pl.lit("1 - <$100K"))
-                                .when((pl.col('SaleAmt') >= 100000) & (pl.col('SaleAmt') < 200000)).then(pl.lit("2 - $100K-$200K"))
-                                .when((pl.col('SaleAmt') >= 200000) & (pl.col('SaleAmt') < 300000)).then(pl.lit("3 - $200K-$300K"))
-                                .when((pl.col('SaleAmt') >= 300000) & (pl.col('SaleAmt') < 400000)).then(pl.lit("4 - $300K-$400K"))
-                                .when((pl.col('SaleAmt') >= 400000) & (pl.col('SaleAmt') < 500000)).then(pl.lit("5 - $400K-$500K"))
-                                .when((pl.col('SaleAmt') >= 500000) & (pl.col('SaleAmt') < 600000)).then(pl.lit("6 - $500K-$600K"))
-                                .when((pl.col('SaleAmt') >= 600000) & (pl.col('SaleAmt') < 700000)).then(pl.lit("7 - $600K-$700K"))
-                                .when((pl.col('SaleAmt') >= 700000) & (pl.col('SaleAmt') < 800000)).then(pl.lit("8 - $700K-$800K"))
-                                .when((pl.col('SaleAmt') >= 800000) & (pl.col('SaleAmt') < 900000)).then(pl.lit("9 - $800K-$900K"))
-                                .when((pl.col('SaleAmt') >= 900000) & (pl.col('SaleAmt') < 1000000)).then(pl.lit("10 - $900K-$1M"))
-                                .when((pl.col('SaleAmt') >= 1000000)).then(pl.lit("11 - >$1M"))
-                                .otherwise(None).alias("SaleBins")),
-                            (pl.lit("Total")).alias("Total"),
-                        ])
-                        .with_columns([
-                            (pl.when((pl.col("SaleAmt_PooledPercentile") <= 2) | (pl.col("SaleAmt_PooledPercentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("Sale_Pooled_Outliers"),
-                            (pl.when((pl.col("TaxRate_PooledPercentile") <= 2) | (pl.col("TaxRate_PooledPercentile") >= 99)).then(pl.lit('Tails')).otherwise(pl.lit('Middle 96%'))).alias("TaxRate_Pooled_Outliers"),
-                        ])
-                        ).collect(streaming=True)
-
-        logging.info('Writing pooled -- ' + mem_profile())
-        sales_unified_pooled.write_parquet(file = Path(output_dir) / 'sales_taxes_pooled.parquet', use_pyarrow=True, compression="snappy")
-
-    logging.info(f"Aggregations")
-    logging.info('Memory usage: ' + mem_profile())
-    for geo_group, geo_list in geo_dict.items():
-        logging.info(f"Aggregating pooled: {geo_group}")
-        print(geo_group)
-        print(geo_list[0])
-        for p_bin in pooled_bins:
-            print(p_bin)
-            pooled_agg = (pl.scan_parquet(Path(output_dir) / 'sales_taxes_pooled.parquet', low_memory = True)
-                    .filter((pl.col("TaxRate_Pooled_Outliers") == 'Middle 96%') )
-                    .group_by(geo_list + [p_bin])
-                    .agg([
-                        pl.count(),
-                        pl.col('PropertyID').n_unique().alias('PropertyID_nunique'),
-                        pl.col('TaxAmt_Pooled_HPI2021').is_not_null().count().alias('TaxAmt_Pooled_HPI2021_notnull'),
-                        pl.col('SaleAmt_HPI2021').is_not_null().count().alias('SaleAmt_HPI2021_notnull'),
-                        pl.col('TaxAmt_Pooled_HPI2021').sum().alias('TaxAmt_Pooled_HPI2021_sum'),
-                        pl.col('SaleAmt_HPI2021').sum().alias('SaleAmt_HPI2021_sum'),
-                        pl.col('TaxAmt_Pooled_HPI2021').mean().alias('TaxAmt_Pooled_HPI2021_mean'),
-                        pl.col('SaleAmt_HPI2021').mean().alias('SaleAmt_HPI2021_mean'),
-                        pl.col('TaxRate_Pooled').mean().alias('TaxRate_Pooled_mean'),
-                        pl.col('TaxAmt_Pooled_HPI2021').median().alias('TaxAmt_Pooled_HPI2021_median'),
-                        pl.col('SaleAmt_HPI2021').median().alias('SaleAmt_HPI2021_median'),
-                        pl.col('TaxRate_Pooled').median().alias('TaxRate_Pooled_median'),
-                        pl.col('TaxAmt_Pooled_HPI2021').std().alias('TaxAmt_Pooled_HPI2021_std'),
-                        pl.col('SaleAmt_HPI2021').std().alias('SaleAmt_HPI2021_std'),
-                        pl.col('TaxRate_Pooled').std().alias('TaxRate_Pooled_std')
-                        ])
-                    .with_columns([
-                        (pl.col('TaxAmt_Pooled_HPI2021_sum') / pl.col('SaleAmt_HPI2021_sum')).alias('TaxRate_Pooled'),
-                        ])
-                    .with_columns([
-                        (pl.col('SaleAmt_HPI2021_sum').over(geo_list).sum().alias('SaleAmt_HPI2021_Total')),
-                        (pl.col('count').over(geo_list).sum().alias('count_Total'))
-                        ])
-                    .sort('count', geo_list[0], p_bin, descending=[True, False, True])
-            ).collect(streaming=True)
-            pooled_agg.write_parquet(Path(output_dir) / 'agg_pooled' / f'{geo_list[0]}_{p_bin}_pooled.parquet', use_pyarrow=True, compression="snappy")
+            for q_bin in ['_Decile', '_Quintile']:
+                query_out = (query_in
+                        .group_by(geo_list + ['SaleAmt' + q_bin] + [t_bin])
+                        .agg([
+                                pl.count(),
+                                pl.col('PropertyID').n_unique().alias('PropertyID_nunique'),
+                                pl.col(f'TaxAmt{hpi_adj}').is_not_null().count().alias('TaxAmt_notnull'),
+                                pl.col(f'SaleAmt{hpi_adj}').is_not_null().count().alias('SaleAmt_notnull'),
+                                # TaxAmt
+                                pl.col(f'TaxAmt{hpi_adj}').sum().alias('TaxAmt_sum'),
+                                pl.col(f'TaxAmt{hpi_adj}').mean().alias('TaxAmt_mean'),
+                                pl.col(f'TaxAmt{hpi_adj}').median().alias('TaxAmt_median'),
+                                pl.col(f'TaxAmt{hpi_adj}').std().alias('TaxAmt_std'),
+                                # TaxRate
+                                pl.col('TaxRate').mean().alias('TaxRate_mean'),
+                                pl.col('TaxRate').median().alias('TaxRate_median'),
+                                pl.col('TaxRate').std().alias('TaxRate_std'),
+                                # SaleAmt
+                                pl.col(f'SaleAmt{hpi_adj}').sum().alias('SaleAmt_sum'),
+                                pl.col(f'SaleAmt{hpi_adj}').mean().alias('SaleAmt_mean'),
+                                pl.col(f'SaleAmt{hpi_adj}').median().alias('SaleAmt_median'),
+                                pl.col(f'SaleAmt{hpi_adj}').std().alias('SaleAmt_std'),
+                                # AssdTotalValue
+                                pl.col('AssdTotalValue_HPI2021_Imputed').sum().alias('AssdTotalValue_HPI2021_Imputed_sum'),
+                                pl.col('AssdTotalValue_HPI2021_Imputed').mean().alias('AssdTotalValue_HPI2021_Imputed_mean'),
+                                pl.col('AssdTotalValue_HPI2021_Imputed').median().alias('AssdTotalValue_HPI2021_Imputed_median'),
+                                pl.col('AssdTotalValue_HPI2021_Imputed').std().alias('AssdTotalValue_HPI2021_Imputed_std'),
+                                # AssdValue_SaleAmt_Ratio
+                                pl.col('AssdValue_SaleAmt_Ratio').mean().alias('AssdValue_SaleAmt_Ratio_mean'),
+                                pl.col('AssdValue_SaleAmt_Ratio').median().alias('AssdValue_SaleAmt_Ratio_median'),
+                                pl.col('AssdValue_SaleAmt_Ratio').std().alias('AssdValue_SaleAmt_Ratio_std'),
+                                # TaxAmt_to_AssdValue_SaleAmt_Ratio
+                                pl.col('TaxAmt_to_AssdValue_SaleAmt_Ratio').mean().alias('TaxAmt_to_AssdValue_SaleAmt_Ratio_mean'),
+                                pl.col('TaxAmt_to_AssdValue_SaleAmt_Ratio').median().alias('TaxAmt_to_AssdValue_SaleAmt_Ratio_median'),
+                                pl.col('TaxAmt_to_AssdValue_SaleAmt_Ratio').median().alias('TaxAmt_to_AssdValue_SaleAmt_Ratio_std')
+                                ])
+                            .with_columns([
+                                (pl.col('TaxAmt_sum') / pl.col('SaleAmt_sum')).alias('TaxRate'),
+                                (pl.col('AssdTotalValue_HPI2021_Imputed_sum') / pl.col('SaleAmt_sum')).alias('AssdValue_SaleAmt_Ratio')
+                            ])
+                            .with_columns([
+                                (pl.col('SaleAmt_sum').over(geo_list).sum().alias('SaleAmt_Total')),
+                                (pl.col('count').over(geo_list).sum().alias('count_Total'))
+                            ])
+                            .sort(geo_list[0], f'SaleAmt{q_bin}', descending=[False, False])
+                ).collect(streaming=True)
+                query_out.write_parquet(Path(output_dir) / 'queries' / f'{t_label}_{geo_list[0]}_SaleAmt{q_bin}_query.parquet', use_pyarrow=True, compression="snappy")
+                query_out.write_csv(Path(output_dir) / 'queries' / f'{t_label}_{geo_list[0]}_SaleAmt{q_bin}_query.csv')
 
 def setup(args=None):
     parser = argparse.ArgumentParser(description='Combine files.')
