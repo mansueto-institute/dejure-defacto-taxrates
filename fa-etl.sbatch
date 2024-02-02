@@ -30,7 +30,7 @@ historical_file_arg=20220606_ValueHistory.txt
 xwalk_dir_arg=$working_directory/inputs/xwalks
 xwalk_files_arg=${xwalk_list[@]}
 
-output_dir_arg=$working_directory/outputs2
+output_dir_arg=$working_directory/outputs3
 
 python fa-etl.py --log_file $log_file_arg --input_dir $input_dir_arg --annual_file $annual_file_arg --sale_file $sale_file_arg --historical_file $historical_file_arg --xwalk_dir $xwalk_dir_arg --xwalk_files $xwalk_files_arg --output_dir $output_dir_arg
 
