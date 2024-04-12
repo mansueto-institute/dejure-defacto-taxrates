@@ -7,4 +7,4 @@
 * To process the data deploy the script `etl/fa-etl.py`. This was completed using the Midway3 High Performance Computer on a node with 175GB of allocatable memory using the following deployment configuration `etl/fa-etl.sbatch`.
 
 #### Assemble tables and charts
-* To assemble the tables in this [spreadsheet](https://docs.google.com/spreadsheets/d/1mbOoV7PJ25wqBaafy8SGOIoci6q1BzzzHQ3IVV01e3A/edit#gid=1570744348) use this script `analysis/fa-analysis.R`. The data files and graphics for the analysis are located in [this Box drive](https://uchicago.box.com/s/9xiu62yt6nonbwazdmz9f5ju1xfui5uy).
+* To assemble the tables in this [spreadsheet](https://docs.google.com/spreadsheets/d/1mbOoV7PJ25wqBaafy8SGOIoci6q1BzzzHQ3IVV01e3A/edit#gid=1570744348) use this script `analysis/fa-analysis.R`. The data files and graphics for the analysis are located in [this Box drive](https://uchicago.box.com/s/9xiu62yt6nonbwazdmz9f5ju1xfui5uy). Background on methods is available [in this link](https://docs.google.com/document/d/1pYwde5Jc3Pk5ugompNk23M6xUgm1PrerKI928oW_yiA/edit).
